@@ -1,0 +1,20 @@
+Static variables untuk filter merupakan teknik pemrograman dalam system khususnya pada platform seperti Arduino dan modul berbasis Espressif Systems (ESP8266/ESP32), yang digunakan untuk menyimpan nilai sebelumnya di dalam sebuah fungsi guna mendukung proses penyaringan (filtering) data sensor secara real-time. Variabel static memiliki sifat khusus, yaitu nilainya tidak akan hilang meskipun fungsi tempat variabel tersebut berada telah selesai. Artinya, setiap kali fungsi dipanggil kembali, variabel tersebut tetap menyimpan nilai terakhir yang telah dihitung sebelumnya.
+
+Dalam sistem pembacaan sensor secara real-time, penggunaan static variable menjadi sangat penting karena data sensor pada umumnya tidak selalu stabil. Hampir semua sensor memiliki noise, yaitu gangguan sinyal yang menyebabkan nilai pembacaan naik-turun secara cepat dan acak. Selain itu, kecepatan pembacaan mikrokontroler yang sangat tinggi juga dapat membuat perubahan kecil pada sensor terlihat sangat drastis di tampilan, misalnya pada LCD atau saat dikirim ke sistem IoT. Akibatnya, data terlihat “loncat-loncat” dan sulit dianalisis.
+
+Untuk mengatasi permasalahan tersebut, digunakan metode filter digital seperti Moving Average, Exponential Moving Average (EMA), dan Low-pass filter. Semua metode ini memiliki satu kesamaan penting: membutuhkan nilai sebelumnya untuk menghitung nilai baru yang lebih stabil. Di sinilah peran static variable menjadi krusial, karena variabel tersebut berfungsi menyimpan histori nilai terakhir tanpa harus menggunakan variabel global.
+
+Sebagai contoh pada filter Exponential Moving Average (EMA), rumus dasarnya adalah:
+
+filtered = (alpha × data_baru) + ((1 − alpha) × data_lama)
+
+CONTOHNYA 
+
+float filterEMA(float input) {
+    static float lastFiltered = 0;   // menyimpan nilai sebelumnya
+    float alpha = 0.2;               // konstanta filter
+    
+    lastFiltered = (alpha * input) + ((1 - alpha) * lastFiltered);
+    
+    return lastFiltered;
+}
