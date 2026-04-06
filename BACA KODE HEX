@@ -1,0 +1,42 @@
+CARA MEMBACA CODE HEX untuk Membaca Data ECU (RX/TX Arduino)
+1. Apa itu HEX (Heksadesimal)
+HEX adalah sistem bilangan berbasis 16. Digunakan oleh ECU dan komunikasi serial karena lebih ringkas.
+HEX menggunakan angka 0-9 dan huruf A-F.
+2. Standar Internasional HEX
+0=0
+1=1
+2=2
+3=3
+4=4
+5=5
+6=6
+7=7
+8=8
+9=9
+A=10
+B=11
+C=12
+D=13
+E=14
+F=15
+3. Rumus HEX 1 Byte
+Rumus: AB = (A × 16) + B
+Contoh:
+1A = (1 × 16) + 10 = 26
+2F = (2 × 16) + 15 = 47
+A0 = (10 × 16) + 0 = 160
+4. Rumus HEX 2 Byte
+Rumus: nilai = (byte1 × 256) + byte2
+Contoh:
+0F A0 = (15 × 256) + 160 = 4000
+13 88 = (19 × 256) + 136 = 5000
+1F 40 = (31 × 256) + 64 = 8000
+5. Contoh Data Serial Monitor ECU
+AA 0F A0 32 00
+Ambil byte RPM = 0F A0
+Nilai = 4000
+6. Mengubah ke RPM
+Rumus ECU umum: RPM = nilai / 4
+Contoh:
+4000 / 4 = 1000 RPM
+
