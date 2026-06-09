@@ -244,10 +244,12 @@ void drawSectionLabelWithLedBar(int y, const char* lbl, uint16_t accentCol) {
   tft.setCursor(MG+5, y+2);
   tft.print(lbl);
 
-  int barW = SW - MG*2 - 5;
+  // Background bar — lebar sama dengan total area yang dipakai 20 segmen
+  int segW = (SW - MG*2 - 19*2) / 20;
+  int totalBarW = 20 * segW + 19 * 2;   // 20 segmen + 19 gap @2px
   int barH = 12;
   int barY = y + 18;
-  tft.fillRect(MG+5, barY, barW, barH, C_TRACK);
+  tft.fillRect(MG, barY, totalBarW, barH, C_TRACK);
 }
 
 void drawRpmLedsEmpty() {
@@ -300,15 +302,16 @@ void updateTPS(int val) {
   // Restore garis vertikal kiri yang mungkin tertimpa fillRect di atas
   tft.drawFastVLine(DIV1_X, SPD_Y, SPD_H - 2, C_BORDER);
 
-  // Bar LED throttle
-  int barW = SW - MG*2 - 5;
+  // Bar LED throttle — formula SAMA dengan bar RPM agar jumlah segmen konsisten
   int barH = 12;
   int barY = SEC1_Y + 18;
-  int lit  = map(val, 0, 100, 0, 20);
-  int segW = (barW - 19) / 20;
+  int lit  = constrain(map(val, 0, 100, 0, 20), 0, 20);
+  if (val == 0) lit = 0;
+  // Formula identik dengan drawRpmLedsEmpty / updateRPM
+  int segW = (SW - MG*2 - 19*2) / 20;
   if (segW < 2) segW = 2;
   for (int i = 0; i < 20; i++) {
-    int segX = MG + 5 + i * (segW + 1);
+    int segX = MG + i * (segW + 2);   // gap = 2, tanpa offset +5
     uint16_t segCol = C_TRACK;
     if (i < lit) {
       float r = (float)i / 20.0;
@@ -433,16 +436,17 @@ void updateSuhu(int val) {
   if (val == lSuhu) return;
   lSuhu = val;
 
-  int barW = SW - MG*2 - 5;
   int barH = 12;
   int barY = SEC2_Y + 18;
   int pct  = constrain(map(val, 10, 100, 0, 100), 0, 100);
-  int lit  = map(pct, 0, 100, 0, 20);
-  int segW = (barW - 19) / 20;
+  int lit  = constrain(map(pct, 0, 100, 0, 20), 0, 20);
+  if (val <= 10) lit = 0;
+  // Formula identik dengan drawRpmLedsEmpty / updateRPM
+  int segW = (SW - MG*2 - 19*2) / 20;
   if (segW < 2) segW = 2;
 
   for (int i = 0; i < 20; i++) {
-    int segX = MG + 5 + i * (segW + 1);
+    int segX = MG + i * (segW + 2);   // gap = 2, tanpa offset +5
     uint16_t segCol = C_TRACK;
     if (i < lit) {
       float tempVal = map(i, 0, 19, 20, 120);
