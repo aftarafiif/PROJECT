@@ -1,0 +1,495 @@
+#include <Arduino.h>
+#include <SoftwareSerial.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <math.h>
+
+#define MONITOR_BAUD      115200
+#define ECU_BAUD          57600
+#define KEEP_ALIVE_MS     6000
+#define ECU_TIMEOUT_MS    3000
+#define ECU_RETRY_MS      2000
+#define SUHU_INTERVAL     500   // interval baca suhu (ms)
+#define LCD_INTERVAL      500   // interval update LCD (ms)
+
+#define VSS_DEBOUNCE_DELAY  0.3
+
+// ========== LCD ==========
+LiquidCrystal_I2C lcd(0x27, 16, 2);   // alamat I2C 0x27, ukuran 16x2
+
+// ========== PIN ==========
+const int ThermistorPin = A0;   // Arduino Nano
+const int IRSensorPin   = 2;    // pin sensor VSS (D2, Nano)
+
+// ========== Serial ==========
+// RX=10 (ke TX ECU), TX=11 (ke RX ECU)
+SoftwareSerial ecuSerial(10, 11);
+
+// ========== Konstanta Thermistor ==========
+const float R1 = 9800.0;
+const float c1 = 0.001129148;
+const float c2 = 0.000234125;
+const float c3 = 0.0000000876741;
+
+// ========== KONSTANTA KECEPATAN (VSS) ==========
+const double kkbanspd = 0.00039878;
+int raw_RPM_VSS = 0;
+
+// ========== Global ECU ==========
+int   g_rpm  = 0;
+float g_tps  = 0.0;
+float g_vbat = 0.0;
+
+String currentLine = "";
+bool ecuConnected = false;
+
+unsigned long lastEcuData = 0;
+unsigned long lastPing = 0;
+
+// ========== Global Suhu ==========
+int g_suhu = 0;
+
+// ========== Global Kecepatan ==========
+int g_kecepatan = 0;
+
+// ========== Buffer suhu ==========
+float suhuBuffer[10] = {0};
+int bufferIndex = 0;
+int bufferFilled = 0;
+
+// ========== VSS ==========
+int inputStateVSS = LOW;
+int lastInputStateVSS = LOW;
+
+unsigned long lastDebounceTimeVSS = 0;
+unsigned long endTimeVSS = 0;
+unsigned long startTimeVSS = 0;
+
+// ========== Buffer kecepatan (moving average) ==========
+int kecepatanBuffer[5] = {0};
+int kecBufIndex = 0;
+bool kecBufFilled = false;
+
+// ========== Timing ==========
+unsigned long lastSuhuRead = 0;
+unsigned long lastLcdUpdate = 0;
+
+// =====================================================
+// Moving Average Kecepatan
+// =====================================================
+
+int smoothKecepatan(int rawVal) {
+
+  kecepatanBuffer[kecBufIndex++] = rawVal;
+
+  if (kecBufIndex >= 5) {
+    kecBufIndex = 0;
+    kecBufFilled = true;
+  }
+
+  int samples = kecBufFilled ? 5 : (kecBufIndex == 0 ? 1 : kecBufIndex);
+
+  long sum = 0;
+
+  for (int i = 0; i < samples; i++)
+    sum += kecepatanBuffer[i];
+
+  return (int)(sum / samples);
+}
+
+// =====================================================
+// ECU - Kirim Command
+// =====================================================
+
+void sendCmd(const char* cmd) {
+  ecuSerial.print(cmd);
+  ecuSerial.println();
+  ecuSerial.flush();
+
+  Serial.print("[TX -> ECU] ");
+  Serial.println(cmd);
+}
+
+// =====================================================
+// ECU - Parsing Helper
+// =====================================================
+
+String getField(const String &s, int fieldNum) {
+  int start = 0;
+
+  for (int i = 0; i < fieldNum; i++) {
+    start = s.indexOf(';', start);
+    if (start == -1)
+      return "";
+    start++;
+  }
+
+  int end = s.indexOf(';', start);
+  if (end == -1)
+    end = s.length();
+
+  String field = s.substring(start, end);
+  field.trim();
+  return field;
+}
+
+String cleanString(const String &s) {
+  String out = "";
+  out.reserve(s.length());
+
+  for (int i = 0; i < (int)s.length(); i++) {
+    char c = s.charAt(i);
+    if (c >= 32 && c <= 126)
+      out += c;
+  }
+  return out;
+}
+
+bool isNumeric(const String &s) {
+  if (s.length() == 0)
+    return false;
+
+  int start = 0;
+  if (s.charAt(0) == '-')
+    start = 1;
+
+  bool hasDot = false;
+
+  for (int i = start; i < (int)s.length(); i++) {
+    char c = s.charAt(i);
+    if (c == '.') {
+      if (hasDot)
+        return false;
+      hasDot = true;
+    } else if (c < '0' || c > '9') {
+      return false;
+    }
+  }
+  return true;
+}
+
+float parseFloatVal(const String &s, float defaultVal, float minVal, float maxVal) {
+  if (!isNumeric(s))
+    return defaultVal;
+
+  float val = s.toFloat();
+  if (val < minVal || val > maxVal)
+    return defaultVal;
+
+  return val;
+}
+
+int parseIntVal(const String &s, int defaultVal, int minVal, int maxVal) {
+  if (!isNumeric(s))
+    return defaultVal;
+
+  int val = s.toInt();
+  if (val < minVal || val > maxVal)
+    return defaultVal;
+
+  return val;
+}
+
+// =====================================================
+// ECU - Parsing Data Utama
+// =====================================================
+
+void parseECU(const String &rawLine) {
+  String line = cleanString(rawLine);
+
+  Serial.print("[RX <- ECU] ");
+  Serial.println(line);
+
+  if (line.length() < 10) {
+    Serial.println("  -> diabaikan (terlalu pendek)");
+    return;
+  }
+
+  if (line.indexOf(';') == -1) {
+    Serial.println("  -> diabaikan (tidak ada ';')");
+    return;
+  }
+
+  int headerIdx = -1;
+  String lineLower = line;
+  lineLower.toLowerCase();
+  headerIdx = lineLower.indexOf("a603;");
+
+  if (headerIdx == -1) {
+    Serial.println("  -> diabaikan (header a603 tidak ditemukan)");
+    return;
+  }
+
+  String data = line.substring(headerIdx);
+
+  int fieldCount = 1;
+  for (int i = 0; i < (int)data.length(); i++) {
+    if (data.charAt(i) == ';')
+      fieldCount++;
+  }
+
+  if (fieldCount < 5) {
+    Serial.println("  -> diabaikan (jumlah field < 5)");
+    return;
+  }
+
+  String fTPS  = getField(data, 1);
+  String fVBAT = getField(data, 2);
+  String fRPM  = getField(data, 4);
+
+  float newTPS  = parseFloatVal(fTPS, g_tps, 0.0, 100.0);
+  float newVBAT = parseFloatVal(fVBAT, g_vbat, 6.0, 20.0);
+  int newRPM    = parseIntVal(fRPM, g_rpm, 0, 20000);
+
+  if (ecuConnected && abs(newRPM - g_rpm) > 8000) {
+    Serial.println("  -> diabaikan (lonjakan RPM tidak wajar)");
+    return;
+  }
+
+  g_tps  = newTPS;
+  g_vbat = newVBAT;
+  g_rpm  = newRPM;
+
+  ecuConnected = true;
+  lastEcuData = millis();
+
+  Serial.print("  -> OK | RPM=");
+  Serial.print(g_rpm);
+  Serial.print(" TPS=");
+  Serial.print(g_tps);
+  Serial.print(" VBAT=");
+  Serial.println(g_vbat);
+}
+
+// =====================================================
+// ECU - Handshake
+// =====================================================
+
+void handshakeECU() {
+  Serial.println(">> Handshake ECU dimulai...");
+
+  sendCmd("1B00");
+  delay(150);
+
+  while (ecuSerial.available())
+    ecuSerial.read();
+
+  sendCmd("1617");
+  delay(200);
+
+  while (ecuSerial.available()) {
+    char c = ecuSerial.read();
+    if (c == '\n') {
+      currentLine = "";
+      break;
+    } else if (c != '\r') {
+      currentLine += c;
+    }
+  }
+
+  currentLine = "";
+  sendCmd("160A");
+  delay(50);
+
+  lastPing = millis();
+  lastEcuData = millis();
+
+  Serial.println(">> Handshake ECU selesai.");
+}
+
+// =====================================================
+// SENSOR - Suhu (Thermistor)
+// =====================================================
+
+void bacaSuhu() {
+  const int N = 20;
+  long sum = 0;
+  for (int i = 0; i < N; i++) {
+    sum += analogRead(ThermistorPin);
+    delay(2);
+  }
+  float Vo = sum / (float)N;
+
+  // ===== KALIBRASI LINEAR 2 TITIK =====
+  const float VO_1 = 378.0;   // Vo saat suhu1
+  const float T_1  = 30.0;    // suhu aktual 1 (°C)
+  const float VO_2 = 350.0;   // Vo saat suhu2
+  const float T_2  = 40.0;    // suhu aktual 2 (°C)
+
+  float mentah = T_1 + (Vo - VO_1) * (T_2 - T_1) / (VO_2 - VO_1);
+
+  suhuBuffer[bufferIndex++] = mentah;
+  if (bufferIndex >= 10) {
+    bufferIndex = 0;
+    bufferFilled = 1;
+  }
+
+  int samples = bufferFilled ? 10 : (bufferIndex == 0 ? 1 : bufferIndex);
+  float sum2 = 0;
+  for (int i = 0; i < samples; i++)
+    sum2 += suhuBuffer[i];
+
+  g_suhu = (int)round(sum2 / samples);
+
+  Serial.print("[SUHU] Vo=");
+  Serial.print(Vo);
+  Serial.print(" | Suhu rata-rata=");
+  Serial.print(g_suhu);
+  Serial.println(" C");
+}
+
+// =====================================================
+// SENSOR - Kecepatan (VSS)
+// =====================================================
+
+void bacaVSS() {
+
+  unsigned long now = millis();
+
+  int currentSwitchState = digitalRead(IRSensorPin);
+
+  if (currentSwitchState != lastInputStateVSS) {
+    lastDebounceTimeVSS = now;
+  }
+
+  if ((now - lastDebounceTimeVSS) > VSS_DEBOUNCE_DELAY) {
+
+    if (currentSwitchState != inputStateVSS) {
+
+      inputStateVSS = currentSwitchState;
+
+      if (inputStateVSS == HIGH) {
+
+        startTimeVSS = lastDebounceTimeVSS;
+
+        if ((startTimeVSS - endTimeVSS) > 0) {
+
+          // Hitung kecepatan mentah lalu haluskan dengan moving average
+          raw_RPM_VSS = 60000 / (startTimeVSS - endTimeVSS);
+          int rawKec = (int)((raw_RPM_VSS * kkbanspd) * 60);
+          g_kecepatan = smoothKecepatan(rawKec);
+        }
+
+        endTimeVSS = startTimeVSS;
+      }
+    }
+  }
+
+  lastInputStateVSS = currentSwitchState;
+}
+
+// =====================================================
+// LCD - Tampilan
+// =====================================================
+// Layout:
+// Baris 1: 060|1234|100%   -> Kecepatan(3) | RPM(4) | TPS(3)%
+// Baris 2: 30C|12.3V|OK    -> Suhu(2)C | VBAT(4)V | Status ECU
+
+void updateLCD() {
+  char buf1[17];
+  char buf2[17];
+  char vbatStr[6];
+
+  // VBAT fixed-width 4 karakter, 1 desimal (misal " 9.8" / "12.3")
+  dtostrf(g_vbat, 4, 1, vbatStr);
+
+  // Baris 1: Kecepatan(3) | RPM(4) | TPS(3)%
+  snprintf(buf1, sizeof(buf1), "%3d|%4d|%3d%%", g_kecepatan, g_rpm, (int)g_tps);
+
+  // Baris 2: Suhu(2)C | VBAT(4)V | Status
+  snprintf(buf2, sizeof(buf2), "%2dC|%sV|%s", g_suhu, vbatStr, ecuConnected ? "OK" : "NO");
+
+  lcd.setCursor(0, 0);
+  lcd.print(buf1);
+
+  lcd.setCursor(0, 1);
+  lcd.print(buf2);
+}
+
+// =====================================================
+// SETUP
+// =====================================================
+
+void setup() {
+  Serial.begin(MONITOR_BAUD);
+  ecuSerial.begin(ECU_BAUD);
+
+  pinMode(ThermistorPin, INPUT);
+  pinMode(IRSensorPin, INPUT);
+
+  // ===== INIT LCD =====
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("SEMERU TEAM");
+  delay(1500);
+  lcd.clear();
+
+  Serial.println("=== Inisialisasi ECU, Suhu & Kecepatan ===");
+  delay(800);
+  handshakeECU();
+
+  lastSuhuRead = millis();
+  lastLcdUpdate = millis();
+}
+
+// =====================================================
+// LOOP
+// =====================================================
+
+void loop() {
+  unsigned long now = millis();
+
+  // ================= ECU TIMEOUT =================
+  if (ecuConnected && (now - lastEcuData > ECU_TIMEOUT_MS)) {
+    ecuConnected = false;
+    g_rpm = 0;
+    g_tps = 0;
+    g_vbat = 0;
+    Serial.println("!! ECU TIMEOUT - koneksi hilang");
+  }
+
+  // ================= ECU RECONNECT =================
+  if (!ecuConnected && (now - lastPing >= ECU_RETRY_MS)) {
+    handshakeECU();
+  }
+
+  // ================= KEEP ALIVE =================
+  if (ecuConnected && (now - lastPing >= KEEP_ALIVE_MS)) {
+    sendCmd("1B00");
+    lastPing = now;
+  }
+
+  // ================= ECU STREAM =================
+  while (ecuSerial.available()) {
+    char c = ecuSerial.read();
+
+    if (c == '\n' || c == '\r') {
+      if (currentLine.length() > 5) {
+        parseECU(currentLine);
+        currentLine = "";
+      }
+    } else {
+      currentLine += c;
+      if (currentLine.length() > 80) {
+        parseECU(currentLine);
+        currentLine = "";
+      }
+    }
+  }
+
+  // ================= BACA VSS (KECEPATAN) =================
+  bacaVSS();
+
+  // ================= BACA SUHU =================
+  if (now - lastSuhuRead >= SUHU_INTERVAL) {
+    bacaSuhu();
+    lastSuhuRead = now;
+  }
+
+  // ================= UPDATE LCD =================
+  if (now - lastLcdUpdate >= LCD_INTERVAL) {
+    updateLCD();
+    lastLcdUpdate = now;
+  }
+}
