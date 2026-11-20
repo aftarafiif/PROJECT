@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Map RPM × TPS - Blue Pill</title>
+<style>
+  :root { --bg:#141413; --card:#222221; --line:#3a3a38; --text:#ecece8; --muted:#9a9a94; --accent:#ef8a5f; --ok:#3ecf9b; --err:#e24b4a; --warn:#f0c440; --edit:#e0a84a; --sel:#4696ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; height:100vh; display:flex; flex-direction:column; overflow:hidden; }
+  
+  /* Header & Tabs */
+  header { display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:space-between; padding:10px 16px; background:var(--card); border-bottom:1px solid var(--line); z-index:10; }
+  .header-left { display:flex; align-items:center; gap:20px; }
+  h1 { font-size:18px; margin:0; font-weight:600; }
+  .tabs { display:flex; gap:4px; background:#1b1b1a; padding:4px; border-radius:10px; border:1px solid var(--line); }
+  .tab-btn { background:transparent; border:0; color:var(--muted); padding:6px 16px; border-radius:6px; cursor:pointer; font-size:14px; font-weight:600; transition:0.2s; }
+  .tab-btn.active { background:var(--card); color:var(--text); box-shadow:0 2px 8px rgba(0,0,0,0.2); }
+  .tab-btn:hover:not(.active) { color:var(--text); }
+
+  /* Layout */
+  .page { display:none; flex:1; overflow:auto; padding:16px; }
+  .page.active { display:block; }
+  
+  /* Page 1: Live Data Grid */
+  .live-grid { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:16px; max-width:1200px; margin:0 auto; }
+  @media (max-width:900px) { .live-grid { grid-template-columns: 1fr; } }
+  
+  /* Page 2: Edit Map Grid */
+  .edit-grid { display:grid; grid-template-columns: 320px 1fr; gap:16px; align-items:start; height:100%; }
+  @media (max-width:1000px) { .edit-grid { grid-template-columns: 1fr; } }
+
+  /* Komponen Umum */
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:12px; }
+  .label { font-size:13px; color:var(--muted); margin-bottom:6px; }
+  .big { font-size:46px; font-weight:700; line-height:1.05; font-variant-numeric:tabular-nums; }
+  .mid { font-size:24px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .unit { font-size:13px; color:var(--muted); font-weight:400; }
+  .kv { display:flex; justify-content:space-between; margin-top:10px; font-size:13px; color:var(--muted); }
+  .kv b { color:var(--text); font-weight:600; font-variant-numeric:tabular-nums; }
+  .bar { height:10px; background:#333331; border-radius:8px; margin-top:10px; overflow:hidden; }
+  .bar > div { height:100%; width:0; background:var(--accent); transition:width .08s linear; }
+  
+  /* Tombol & Status */
+  .btns { display:flex; gap:8px; flex-wrap:wrap; }
+  button { background:var(--card); color:var(--text); border:1px solid var(--line); border-radius:10px; padding:9px 14px; font-size:14px; cursor:pointer; }
+  button:hover { border-color:var(--ok); } button:disabled { opacity:.45; cursor:default; border-color:var(--line); }
+  button.primary { border-color:var(--ok); }
+  button.danger { border-color:var(--err); color:var(--err); }
+  button.save { border-color:var(--accent); background:rgba(239,138,95,0.12); }
+  button.save:not(:disabled):hover { background:rgba(239,138,95,0.22); }
+  .status { font-size:13px; color:var(--muted); display:flex; align-items:center; gap:6px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--muted); }
+  .dot.ok { background:var(--ok); } .dot.err { background:var(--err); } .dot.warn { background:var(--warn); }
+
+  /* Map & Canvas */
+  .mapwrap { overflow:auto; border-radius:8px; background:#1b1b1a; border:1px solid var(--line); }
+  canvas#map { display:block; cursor:crosshair; }
+  .tools { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
+  .tools label { font-size:13px; color:var(--muted); display:inline-flex; align-items:center; gap:6px; }
+  .legend { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); margin-top:8px; }
+  .legend .grad { flex:1; height:8px; border-radius:4px; background:linear-gradient(90deg,#2b3a8f,#1fa4b8,#3ecf9b,#f0c440,#e24b4a); }
+  .note { font-size:12px; color:var(--muted); margin-top:10px; line-height:1.5; }
+
+  /* Kalibrasi & Info Simpan */
+  .calrow { display:flex; gap:6px; margin-top:8px; }
+  .calrow button { flex:1; padding:7px 6px; font-size:13px; }
+  .calinfo { font-size:12px; color:var(--muted); margin-top:8px; line-height:1.6; } .calinfo b { color:var(--text); }
+  .saveinfo { font-size:12px; margin-top:8px; padding:8px 10px; border-radius:8px; border:1px solid var(--line); display:none; }
+  .saveinfo.ok { display:block; border-color:var(--ok); color:var(--ok); }
+  .saveinfo.warn { display:block; border-color:var(--warn); color:var(--warn); }
+  .saveinfo.err { display:block; border-color:var(--err); color:var(--err); }
+  .saveinfo.info { display:block; border-color:var(--accent); color:var(--accent); }
+  .badge { display:inline-block; font-size:11px; padding:2px 8px; border-radius:20px; border:1px solid var(--line); color:var(--muted); margin-left:6px; vertical-align:middle; }
+  .badge.ok { border-color:var(--ok); color:var(--ok); }
+  .badge.warn { border-color:var(--warn); color:var(--warn); }
+  .badge.err { border-color:var(--err); color:var(--err); }
+  .badge.edit { border-color:var(--edit); color:var(--edit); }
+  
+  .editbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px; padding:10px; border-radius:10px; background:#1b1b1a; border:1px solid var(--line); }
+  .editbar .info { font-size:12px; color:var(--muted); flex:1; min-width:150px; }
+  .progress { flex-basis:100%; height:6px; background:#333331; border-radius:6px; overflow:hidden; margin-top:6px; display:none; }
+  .progress > div { height:100%; width:0; background:var(--accent); transition:width .1s linear; }
+  
+  /* Menu Konteks */
+  .ctxmenu {
+    position: fixed; z-index: 9999; min-width: 230px;
+    background: #2a2a28; border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.5); padding: 6px; display: none;
+    font-size: 13px; color: var(--text);
+  }
+  .ctxmenu.show { display: block; }
+  .ctxmenu .title { font-size: 11px; color: var(--muted); padding: 6px 10px 4px; }
+  .ctxmenu button { display: block; width: 100%; text-align: left; background: transparent; border: 0; color: var(--text); padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .ctxmenu button:hover { background: rgba(239,138,95,0.15); }
+  .ctxmenu .sep { height: 1px; background: var(--line); margin: 4px 6px; }
+  .ctxmenu .hint { font-size: 11px; color: var(--muted); padding: 4px 10px 2px; }
+
+  /* Modal Dialog */
+  .modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); backdrop-filter: blur(2px); display: none; align-items: center; justify-content: center; z-index: 10000; }
+  .modal-overlay.show { display: flex; }
+  .modal { background: var(--card); border: 1px solid var(--line); border-radius: 14px; width: 90%; max-width: 400px; padding: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.8); }
+  .modal h3 { margin: 0 0 10px 0; font-size: 16px; color: var(--accent); }
+  .modal p { margin: 0 0 15px 0; font-size: 13px; color: var(--muted); line-height: 1.5; }
+  .modal input { width: 100%; padding: 10px 12px; background: #1b1b1a; border: 1px solid var(--line); border-radius: 8px; color: var(--text); font-size: 16px; font-variant-numeric: tabular-nums; margin-bottom: 15px; outline: none; }
+  .modal input:focus { border-color: var(--accent); }
+  .modal-btns { display: flex; gap: 10px; justify-content: flex-end; }
+  .modal-btns button { padding: 8px 16px; font-size: 14px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <h1>ECU Tuning</h1>
+    <div class="tabs">
+      <button class="tab-btn active" data-target="page1">Live Data</button>
+      <button class="tab-btn" data-target="page2">Tuning Map</button>
+    </div>
+  </div>
+  <div class="btns">
+    <span class="status" style="margin-right:12px"><span class="dot" id="dot"></span><span id="status">Belum terhubung</span></span>
+    <button id="btnConnect" class="primary">Sambungkan</button>
+    <button id="btnDisconnect" disabled>Putuskan</button>
+    <button id="btnDemo">Demo</button>
+  </div>
+</header>
+
+<!-- PAGE 1: LIVE DATA -->
+<div id="page1" class="page active">
+  <div class="live-grid">
+    <div>
+      <div class="card">
+        <div class="label">RPM</div>
+        <div class="big"><span id="rpm">0</span> <span class="unit">rpm</span></div>
+        <div class="bar"><div id="barRpm"></div></div>
+        <div class="label" style="margin-top:16px">TPS</div>
+        <div class="mid"><span id="tps">0.0</span> <span class="unit">%</span></div>
+        <div class="bar"><div id="barTps"></div></div>
+      </div>
+      <div class="card">
+        <div class="label">Info Mesin (Live)</div>
+        <div class="kv" style="margin-top:0"><span>Lebar semprotan</span><b><span id="pw">0.000</span> ms</b></div>
+        <div class="kv"><span>Waktu 1 putaran</span><b><span id="rev">0</span> µs</b></div>
+        <div class="kv"><span>Jumlah TDC</span><b><span id="tdc">0</span></b></div>
+        <div class="kv"><span>Data/detik</span><b><span id="rate">0</span></b></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <div class="label">Sel yang dipakai ECU (live)</div>
+        <div class="kv" style="margin-top:0"><span>RPM</span><b id="cellRpm">-</b></div>
+        <div class="kv"><span>TPS</span><b id="cellTps">-</b></div>
+        <div class="kv"><span>Nilai sel</span><b id="cellVal">-</b></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <div class="label">Kalibrasi TPS</div>
+        <div class="kv" style="margin-top:0"><span>ADC mentah</span><b id="adcRaw">-</b></div>
+        <div class="kv"><span>ADC saat 0%</span><b id="calLowTxt">-</b></div>
+        <div class="kv"><span>ADC saat gas penuh</span><b id="calHighTxt">-</b></div>
+        <div class="kv"><span>Gas penuh terbaca</span><b><span id="fullTxt">74.3</span> %</b></div>
+        <div class="kv"><span>Tersimpan di EEPROM</span><b id="savedTxt">-</b></div>
+        <div class="calrow">
+          <button id="btnCalLow" disabled>Set 0%</button>
+          <button id="btnCalHigh" disabled>Set gas penuh</button>
+          <button id="btnCalReset" disabled>Reset</button>
+        </div>
+        <div class="calinfo">Throttle <b>idle</b> → <b>Set 0%</b>. Throttle <b>dibuka penuh</b> → <b>Set gas penuh</b> (terbaca <b id="fullTxt2">74.3</b>%).</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- PAGE 2: TUNING MAP -->
+<div id="page2" class="page">
+  <div class="edit-grid">
+    <!-- Sidebar Kiri -->
+    <div>
+      <div class="card">
+        <div class="label" style="display:flex; justify-content:space-between; align-items:center;">
+          <span>Status Tabel</span>
+          <span id="srcBadge" class="badge" style="display:none"></span>
+        </div>
+        <button id="btnReload" disabled style="width:100%; margin-top:8px;">Baca Ulang Tabel dari STM32</button>
+      </div>
+      
+      <div class="card">
+        <div class="editbar">
+          <div class="info" id="editInfo">Double-click sel → seret ke sel lain → klik kanan untuk Tambah / Set ulang nilai.</div>
+          <button id="btnSaveAll" class="save" style="width:100%" disabled>Simpan ke STM32 + EEPROM</button>
+          <button id="btnDiscard" class="danger" style="width:100%" disabled>Batalkan perubahan</button>
+          <div class="progress" id="saveProgress"><div></div></div>
+        </div>
+        <div id="saveInfo" class="saveinfo"></div>
+      </div>
+    </div>
+
+    <!-- Area Kanan: Canvas -->
+    <div class="card" style="margin-bottom:0;">
+      <div class="tools">
+        <span class="label" style="margin:0; font-weight:600;">Base Map Bahan Bakar (ms)</span>
+        <label><input type="checkbox" id="showColor" checked> Warna otomatis</label>
+        <label><input type="checkbox" id="showDiff" checked> Tandai sel berubah</label>
+      </div>
+      <div class="mapwrap"><canvas id="map"></canvas></div>
+      <div class="legend"><span>rendah</span><div class="grad"></div><span>tinggi</span></div>
+      <div class="note">
+        <b>Cara edit:</b> Double-click sel → seret (drag) ke sel lain untuk membentuk blok biru → klik kanan pada blok → pilih <b>Tambahkan nilai</b> atau <b>Set ulang nilai</b>. Perubahan disimpan sebagai draft kuning di browser. Tekan <b>Simpan ke STM32 + EEPROM</b> untuk menerapkan.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Input Kustom -->
+<div id="inputModal" class="modal-overlay">
+  <div class="modal">
+    <h3 id="modalTitle">Input Nilai</h3>
+    <p id="modalDesc">Masukkan nilai.</p>
+    <input type="text" id="modalInput" autocomplete="off">
+    <div class="modal-btns">
+      <button id="modalCancel">Batal</button>
+      <button id="modalOk" class="primary">Terapkan</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var ids = ['dot','status','rpm','tps','pw','rev','tdc','rate','barRpm','barTps','adcRaw','calLowTxt','calHighTxt','fullTxt','fullTxt2','savedTxt',
+             'btnCalLow','btnCalHigh','btnCalReset','cellRpm','cellTps','cellVal','map','showColor','showDiff','btnConnect','btnDisconnect','btnReload','btnDemo',
+             'saveInfo','srcBadge','editInfo','btnSaveAll','btnDiscard','saveProgress', 'inputModal','modalTitle','modalDesc','modalInput','modalCancel','modalOk'];
+  var els = {}; ids.forEach(function (i) { els[i] = $(i); });
+
+  var RPM_BP = [], TPS_BP = [], map = [], baseMap = [], ROWS = 0, COLS = 0, tpsFull = 74.3;
+  var lastRpm = 0, lastTps = 0, lastRev = 0, lastTdc = 0, lastAdc = 0, lastPw = 0;
+  var calLow = null, calHigh = null, calSaved = 0, liveR = -1, liveC = -1;
+  var linesThisSec = 0, got = 0, total = 0;
+  var port = null, reader = null, keepReading = false, buffer = '', demoTimer = null, demoPhase = 0;
+  var eepReady = false;
+  var engineRunning = false;
+  var dirty = {};          // { "r,c": true }
+  var saving = false;
+  var pendingSetAck = null;
+
+  // Seleksi blok
+  var selActive = false;
+  var selR1 = 0, selC1 = 0, selR2 = 0, selC2 = 0;
+  var dragging = false;
+  
+  // State Modal
+  var modalMode = 'add'; // 'add' atau 'set'
+
+  // --- Logika Tab ---
+  document.querySelectorAll('.tab-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      $(btn.getAttribute('data-target')).classList.add('active');
+      if (btn.getAttribute('data-target') === 'page2') {
+        setTimeout(drawMap, 50); // redraw canvas jika tab tersembunyi sebelumnya
+      }
+    });
+  });
+
+  function setStatus(t, k) { els.status.textContent = t; els.dot.className = 'dot' + (k ? ' ' + k : ''); }
+  function setConnected(on) {
+    els.btnConnect.disabled = on; els.btnDisconnect.disabled = !on; els.btnReload.disabled = !on;
+    [els.btnCalLow, els.btnCalHigh, els.btnCalReset].forEach(function (b) { b.disabled = !on; });
+    if (!on) { saving = false; els.btnSaveAll.disabled = true; els.btnDiscard.disabled = true; }
+  }
+  function showSaveInfo(msg, kind) {
+    els.saveInfo.className = 'saveinfo ' + (kind || '');
+    els.saveInfo.textContent = msg || '';
+  }
+
+  // ---------- Protokol serial ----------
+  function handleLine(line) {
+    // 1. Tangkap format data live dari STM32 (RPM,9191,REV,6528,...)
+    if (line.startsWith('RPM,')) {
+      var match = line.match(/RPM,(\d+),REV,(\d+),TDC,(\d+),TPS,(\d+),ADC,(\d+),PW,(\d+),R,(\d+),C,(\d+)/);
+      if (match) {
+        lastRpm = +match[1]; 
+        lastRev = +match[2]; 
+        lastTdc = +match[3];
+        lastTps = +match[4] / 10; 
+        lastAdc = +match[5]; 
+        lastPw = +match[6];
+        liveR = +match[7]; liveC = +match[8];
+        engineRunning = lastRev > 0;
+        linesThisSec++; updateLive();
+      }
+      return;
+    }
+
+    // 2. Tangkap format tabel dan kalibrasi
+    var p = line.split(','), k = p[0], i;
+    if (k === 'H') {
+      ROWS = +p[1]; COLS = +p[2]; tpsFull = +p[3] / 10;
+      calLow = +p[4]; calHigh = +p[5]; eepReady = (+p[6] === 1);
+      RPM_BP = []; TPS_BP = []; map = []; baseMap = []; dirty = {};
+      for (i = 0; i < ROWS; i++) { map.push(new Array(COLS).fill(0)); baseMap.push(new Array(COLS).fill(0)); }
+      got = 0; total = ROWS * COLS;
+      setStatus('Membaca tabel dari STM32...', 'ok'); updateLive();
+    } else if (k === 'R') { for (i = 2; i < p.length; i++) RPM_BP[+p[1] + i - 2] = +p[i]; }
+    else if (k === 'X') { for (i = 2; i < p.length; i++) TPS_BP[+p[1] + i - 2] = +p[i] / 10; }
+    else if (k === 'T') {
+      var r = +p[1], c0 = +p[2];
+      if (!map[r]) return;
+      for (i = 3; i < p.length; i++) {
+        var v = +p[i] / 1000;
+        map[r][c0 + i - 3] = v;
+        baseMap[r][c0 + i - 3] = v;
+        got++;
+      }
+      if (total) setStatus('Membaca tabel... ' + Math.round(100 * got / total) + '%', 'ok');
+    } else if (k === 'E') {
+      setStatus('Terhubung — tabel diterima (' + ROWS + '×' + COLS + ')', 'ok');
+      dirty = {};
+      selActive = false;
+      updateDirtyUI(); updateSrcBadge(); drawMap();
+    } else if (k === 'C') {
+      calLow = +p[1]; calHigh = +p[2]; calSaved = +p[3]; updateLive();
+    } 
+    else if (line.startsWith('OK,SET,')) { 
+      var rr = +p[2], cc = +p[3], vv = +p[4], sv = (p.length >= 6 && +p[5] === 1);
+      if (pendingSetAck) { var cb = pendingSetAck; pendingSetAck = null; cb(true, rr, cc, vv, sv); }
+    } 
+    else if (line.startsWith('ERR,SET')) {
+      if (pendingSetAck) { var cb2 = pendingSetAck; pendingSetAck = null; cb2(false); }
+    }
+  }
+
+  // ---------- Tampilan live ----------
+  function updateLive() {
+    els.rpm.textContent = Math.round(lastRpm).toLocaleString('id-ID');
+    els.tps.textContent = lastTps.toFixed(1);
+    els.pw.textContent = (lastPw / 1000).toFixed(3);
+    els.rev.textContent = Math.round(lastRev).toLocaleString('id-ID');
+    els.tdc.textContent = Math.round(lastTdc).toLocaleString('id-ID');
+    els.barRpm.style.width = Math.max(0, Math.min(100, lastRpm / 100)) + '%';
+    els.barTps.style.width = Math.max(0, Math.min(100, lastTps / tpsFull * 100)) + '%';
+    els.adcRaw.textContent = lastAdc || '-';
+    els.calLowTxt.textContent = calLow != null ? calLow : '-';
+    els.calHighTxt.textContent = calHigh != null ? calHigh : '-';
+    els.fullTxt.textContent = els.fullTxt2.textContent = tpsFull.toFixed(1);
+    els.savedTxt.textContent = calHigh == null ? '-' : (calSaved ? 'ya' : 'belum');
+    els.savedTxt.style.color = calSaved ? 'var(--ok)' : 'var(--warn)';
+    if (map[liveR] && liveC >= 0 && liveC < COLS) {
+      els.cellRpm.textContent = 'baris ' + (liveR + 1) + ' (' + RPM_BP[liveR] + ' rpm)';
+      els.cellTps.textContent = 'kolom ' + (liveC + 1) + ' (' + fmtBp(TPS_BP[liveC]) + ' %)';
+      els.cellVal.textContent = map[liveR][liveC].toFixed(3) + ' ms';
+    }
+    updateSrcBadge();
+    drawMap();
+  }
+  function updateSrcBadge() {
+    if (!ROWS) { els.srcBadge.style.display = 'none'; return; }
+    els.srcBadge.style.display = 'inline-block';
+    var n = dirtyCount();
+    if (!eepReady) {
+      els.srcBadge.className = 'badge err';
+      els.srcBadge.textContent = 'EEPROM tidak siap';
+    } else if (n > 0) {
+      els.srcBadge.className = 'badge edit';
+      els.srcBadge.textContent = n + ' sel belum disimpan';
+    } else {
+      els.srcBadge.className = 'badge ok';
+      els.srcBadge.textContent = 'Tabel dari EEPROM';
+    }
+  }
+  function fmtBp(v) { return String(Math.round(v * 10) / 10); }
+
+  // ---------- Dirty ----------
+  function dirtyCount() { return Object.keys(dirty).length; }
+  function isDirty(r, c) { return !!dirty[r + ',' + c]; }
+  function markDirty(r, c) {
+    var key = r + ',' + c;
+    if (Math.abs(map[r][c] - baseMap[r][c]) < 0.0005) delete dirty[key];
+    else dirty[key] = true;
+  }
+  function updateDirtyUI() {
+    var n = dirtyCount();
+    els.btnSaveAll.disabled = (n === 0 || saving || !port);
+    els.btnDiscard.disabled = (n === 0 || saving);
+    els.editInfo.textContent = n === 0
+      ? 'Double-click sel → seret ke sel lain → klik kanan untuk Tambah / Set ulang nilai.'
+      : n + ' sel berubah — tekan "Simpan ke STM32 + EEPROM" untuk mengirim semua, atau "Batalkan perubahan".';
+    updateSrcBadge();
+  }
+
+  // ---------- Gambar tabel ----------
+  var CW = 40, CH = 22, PL = 48, PT = 24;
+  function drawMap() {
+    if (!els.map) return;
+    var c = els.map, dpr = window.devicePixelRatio || 1;
+    var w = ROWS ? PL + COLS * CW + 2 : 380, h = ROWS ? PT + ROWS * CH + 2 : 50;
+    if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+      c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); c.style.width = w + 'px'; c.style.height = h + 'px';
+    }
+    var g = c.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+    g.font = '10px system-ui, sans-serif';
+    if (!ROWS) { g.fillStyle = '#9a9a94'; g.textAlign = 'left'; g.textBaseline = 'middle'; g.fillText('Belum ada tabel — klik Sambungkan (atau Demo)', 12, 25); return; }
+    var mn = Infinity, mx = -Infinity, r, q;
+    for (r = 0; r < ROWS; r++) for (q = 0; q < COLS; q++) { var v = map[r][q]; if (v < mn) mn = v; if (v > mx) mx = v; }
+    if (mx === mn) mx = mn + 1;
+    g.fillStyle = '#9a9a94'; g.textAlign = 'center'; g.textBaseline = 'bottom';
+    for (q = 0; q < COLS; q++) g.fillText(fmtBp(TPS_BP[q]), PL + q * CW + CW / 2, PT - 4);
+    g.textAlign = 'right'; g.textBaseline = 'middle';
+    for (r = 0; r < ROWS; r++) g.fillText(RPM_BP[r], PL - 6, PT + r * CH + CH / 2);
+
+    var markDiff = els.showDiff.checked;
+    for (r = 0; r < ROWS; r++) for (q = 0; q < COLS; q++) {
+      var x = PL + q * CW, y = PT + r * CH, val = map[r][q];
+      g.fillStyle = els.showColor.checked ? colorFor(val, mn, mx) : '#2c2c2b';
+      g.fillRect(x + 1, y + 1, CW - 2, CH - 2);
+      if (markDiff && isDirty(r, q)) {
+        g.fillStyle = 'rgba(224,168,74,0.35)';
+        g.fillRect(x + 1, y + 1, CW - 2, CH - 2);
+        g.strokeStyle = 'rgba(224,168,74,1)';
+        g.lineWidth = 2;
+        g.strokeRect(x + 1.5, y + 1.5, CW - 3, CH - 3);
+      }
+      g.fillStyle = '#ecece8'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(val.toFixed(2), x + CW / 2, y + CH / 2);
+    }
+
+    // Sorotan live ECU
+    if (liveR >= 0 && liveR < ROWS && liveC >= 0 && liveC < COLS) {
+      var sx = PL + liveC * CW, sy = PT + liveR * CH;
+      g.fillStyle = 'rgba(239,138,95,0.18)'; g.fillRect(sx + 2, sy + 2, CW - 4, CH - 4);
+      g.strokeStyle = 'rgba(239,138,95,0.9)'; g.lineWidth = 2; g.strokeRect(sx + 1, sy + 1, CW - 2, CH - 2);
+    }
+
+    // Sorotan blok seleksi
+    var selB = selBounds();
+    if (selB) {
+      var x1 = PL + selB.c1 * CW, y1 = PT + selB.r1 * CH;
+      var x2 = PL + (selB.c2 + 1) * CW, y2 = PT + (selB.r2 + 1) * CH;
+      g.fillStyle = 'rgba(70,150,255,0.20)';
+      g.fillRect(x1 + 1, y1 + 1, x2 - x1 - 2, y2 - y1 - 2);
+      g.strokeStyle = 'rgba(70,150,255,1)';
+      g.lineWidth = 2;
+      g.strokeRect(x1 + 1.5, y1 + 1.5, x2 - x1 - 3, y2 - y1 - 3);
+      var n = (selB.r2 - selB.r1 + 1) * (selB.c2 - selB.c1 + 1);
+      g.fillStyle = 'rgba(70,150,255,1)';
+      g.font = '10px system-ui, sans-serif';
+      g.textAlign = 'left'; g.textBaseline = 'top';
+      g.fillText(n + ' sel', x1 + 4, y1 + 3);
+    }
+  }
+  function colorFor(v, mn, mx) {
+    var t = (v - mn) / (mx - mn);
+    var s = [[0, 43, 58, 143], [.25, 31, 164, 184], [.5, 62, 207, 155], [.75, 240, 196, 64], [1, 226, 75, 74]];
+    for (var i = 0; i < 4; i++) {
+      var a = s[i], b = s[i + 1];
+      if (t >= a[0] && t <= b[0]) {
+        var f = (t - a[0]) / (b[0] - a[0]);
+        return 'rgb(' + Math.round(a[1] + (b[1] - a[1]) * f) + ',' + Math.round(a[2] + (b[2] - a[2]) * f) + ',' + Math.round(a[3] + (b[3] - a[3]) * f) + ')';
+      }
+    }
+    return '#2c2c2b';
+  }
+
+  // ---------- Seleksi blok ----------
+  function cellFromEvent(e) {
+    var rect = els.map.getBoundingClientRect();
+    var x = e.clientX - rect.left - PL, y = e.clientY - rect.top - PT;
+    if (x < 0 || y < 0) return null;
+    var cc = Math.floor(x / CW), rr = Math.floor(y / CH);
+    if (rr < 0 || rr >= ROWS || cc < 0 || cc >= COLS) return null;
+    return { r: rr, c: cc };
+  }
+  function selBounds() {
+    if (!selActive) return null;
+    return {
+      r1: Math.min(selR1, selR2), r2: Math.max(selR1, selR2),
+      c1: Math.min(selC1, selC2), c2: Math.max(selC1, selC2)
+    };
+  }
+  function clearSel() {
+    selActive = false; dragging = false;
+    drawMap();
+  }
+
+  els.map.addEventListener('dblclick', function (e) {
+    if (!ROWS) return;
+    var cell = cellFromEvent(e);
+    if (!cell) return;
+    e.preventDefault();
+    selActive = true;
+    selR1 = selR2 = cell.r;
+    selC1 = selC2 = cell.c;
+    dragging = true;
+    hideCtx();
+    drawMap();
+  });
+
+  els.map.addEventListener('mousedown', function (e) {
+    if (!ROWS) return;
+    if (e.button === 2) return;
+    var cell = cellFromEvent(e);
+    if (!cell) return;
+    if (selActive) {
+      selR1 = cell.r; selC1 = cell.c;
+      selR2 = cell.r; selC2 = cell.c;
+      dragging = true;
+      hideCtx();
+      drawMap();
+      e.preventDefault();
+    }
+  });
+
+  els.map.addEventListener('mousemove', function (e) {
+    if (!dragging || !selActive) return;
+    var cell = cellFromEvent(e);
+    if (!cell) return;
+    if (cell.r !== selR2 || cell.c !== selC2) {
+      selR2 = cell.r; selC2 = cell.c;
+      drawMap();
+    }
+  });
+  document.addEventListener('mouseup', function () {
+    if (dragging) { dragging = false; drawMap(); }
+  });
+
+  els.map.addEventListener('contextmenu', function (e) {
+    if (!ROWS) return;
+    var cell = cellFromEvent(e);
+    if (!cell) { hideCtx(); return; }
+    e.preventDefault();
+    if (!selActive) { selActive = true; selR1 = selR2 = cell.r; selC1 = selC2 = cell.c; drawMap(); }
+    var b = selBounds();
+    if (cell.r < b.r1 || cell.r > b.r2 || cell.c < b.c1 || cell.c > b.c2) {
+      selR1 = selR2 = cell.r; selC1 = selC2 = cell.c;
+      drawMap();
+    }
+    showCtx(e.clientX, e.clientY);
+  });
+
+  document.addEventListener('mousedown', function (e) {
+    var m = $('ctxmenu');
+    if (m && m.classList.contains('show') && !m.contains(e.target)) hideCtx();
+  });
+
+  // ---------- Menu konteks ----------
+  function ensureCtx() {
+    var m = $('ctxmenu');
+    if (m) return m;
+    m = document.createElement('div');
+    m.id = 'ctxmenu'; m.className = 'ctxmenu';
+    m.innerHTML = '' +
+      '<div class="title" id="ctxTitle">Blok</div>' +
+      '<button data-act="add">Tambahkan nilai…</button>' +
+      '<button data-act="set">Set ulang nilai…</button>' +
+      '<div class="sep"></div>' +
+      '<div class="hint">Nilai dalam ms, boleh desimal. Untuk "Tambah", boleh negatif.</div>' +
+      '<button data-act="cancel">Batalkan seleksi</button>';
+    document.body.appendChild(m);
+    m.addEventListener('click', function (e) {
+      var b = e.target.closest('button');
+      if (!b) return;
+      var act = b.getAttribute('data-act');
+      if (act === 'add') openModal('add');
+      else if (act === 'set') openModal('set');
+      else if (act === 'cancel') { hideCtx(); clearSel(); }
+    });
+    return m;
+  }
+  function showCtx(x, y) {
+    var m = ensureCtx();
+    var b = selBounds();
+    var n = (b.r2 - b.r1 + 1) * (b.c2 - b.c1 + 1);
+    $('ctxTitle').textContent = 'Blok ' + n + ' sel (baris ' + (b.r1 + 1) + '–' + (b.r2 + 1) + ', kolom ' + (b.c1 + 1) + '–' + (b.c2 + 1) + ')';
+    m.classList.add('show');
+    m.style.left = x + 'px';
+    m.style.top = y + 'px';
+    requestAnimationFrame(function () {
+      var r = m.getBoundingClientRect();
+      if (r.right > innerWidth - 8) m.style.left = Math.max(8, innerWidth - r.width - 8) + 'px';
+      if (r.bottom > innerHeight - 8) m.style.top = Math.max(8, innerHeight - r.height - 8) + 'px';
+    });
+  }
+  function hideCtx() { var m = $('ctxmenu'); if (m) m.classList.remove('show'); }
+
+  // ---------- Modal Dialog Kustom ----------
+  function openModal(mode) {
+    hideCtx();
+    var b = selBounds();
+    if (!b) return;
+    modalMode = mode;
+    var n = (b.r2 - b.r1 + 1) * (b.c2 - b.c1 + 1);
+    
+    if (mode === 'add') {
+      els.modalTitle.textContent = 'Tambahkan Nilai';
+      els.modalDesc.innerHTML = 'Tiap sel di blok <b>' + n + ' sel</b> akan ditambah dengan nilai di bawah ini.<br>Boleh negatif (contoh: <code>50</code> atau <code>-20</code>).';
+      els.modalInput.value = '0';
+    } else {
+      els.modalTitle.textContent = 'Set Ulang Nilai';
+      els.modalDesc.innerHTML = 'Semua sel di blok <b>' + n + ' sel</b> akan dijadikan nilai di bawah ini.<br>Contoh: <code>1.500</code>';
+      els.modalInput.value = map[b.r1][b.c1].toFixed(3);
+    }
+    
+    els.inputModal.classList.add('show');
+    els.modalInput.focus();
+    els.modalInput.select();
+  }
+
+  function closeModal() {
+    els.inputModal.classList.remove('show');
+  }
+
+  function applyModal() {
+    var b = selBounds();
+    if (!b) { closeModal(); return; }
+    
+    var s = els.modalInput.value;
+    var nv = parseFloat(String(s).replace(',', '.'));
+    if (!isFinite(nv)) {
+      alert('Nilai tidak valid. Masukkan angka.');
+      els.modalInput.focus();
+      return;
+    }
+
+    var valUs = Math.round(nv * 1000);
+    var changed = 0;
+    for (var r = b.r1; r <= b.r2; r++) {
+      for (var c = b.c1; c <= b.c2; c++) {
+        var curUs = Math.round(map[r][c] * 1000);
+        var newUs = (modalMode === 'add') ? (curUs + valUs) : valUs;
+        if (newUs < 0) newUs = 0;
+        if (newUs > 20000) newUs = 20000;
+        var newMs = newUs / 1000;
+        if (Math.abs(newMs - map[r][c]) >= 0.0005) changed++;
+        map[r][c] = newMs;
+        markDirty(r, c);
+      }
+    }
+    
+    closeModal();
+    updateDirtyUI(); drawMap();
+    
+    if (changed > 0) {
+      showSaveInfo((modalMode === 'add' ? 'Ditambahkan ' : 'Diset ') + nv.toFixed(3) + ' ms ke ' + changed + ' sel. Tekan "Simpan ke STM32 + EEPROM" untuk mengirim.', 'info');
+    } else {
+      showSaveInfo('Tidak ada nilai yang berubah.', 'info');
+    }
+  }
+
+  els.modalOk.addEventListener('click', applyModal);
+  els.modalCancel.addEventListener('click', closeModal);
+  els.modalInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') applyModal();
+    if (e.key === 'Escape') closeModal();
+  });
+
+  // ---------- Simpan ke STM32 ----------
+  async function sendCmdAwait(cmd, timeoutMs) {
+    if (!port || !port.writable) throw new Error('Tidak terhubung');
+    return new Promise(function (resolve, reject) {
+      var t = setTimeout(function () { pendingSetAck = null; reject(new Error('Timeout menunggu balasan STM32')); }, timeoutMs || 1500);
+      pendingSetAck = function (ok, r, c, v, sv) {
+        clearTimeout(t);
+        if (!ok) reject(new Error('STM32 menolak SET'));
+        else resolve({ r: r, c: c, v: v, saved: sv });
+      };
+      (async function () {
+        try {
+          var w = port.writable.getWriter();
+          await w.write(new TextEncoder().encode(cmd + '\n'));
+          w.releaseLock();
+        } catch (e) { clearTimeout(t); pendingSetAck = null; reject(e); }
+      })();
+    });
+  }
+
+  els.btnSaveAll.addEventListener('click', async function () {
+    if (!port) { showSaveInfo('Tidak terhubung.', 'err'); return; }
+    var keys = Object.keys(dirty);
+    if (keys.length === 0) return;
+    if (engineRunning && !confirm('Mesin sedang berputar. Perubahan akan dikirim ke RAM, tetapi TIDAK akan tersimpan ke EEPROM. Tetap lanjut?')) return;
+
+    saving = true;
+    els.btnSaveAll.disabled = true; els.btnDiscard.disabled = true;
+    var prog = els.saveProgress;
+    prog.style.display = 'block';
+    var bar = prog.firstElementChild;
+    bar.style.width = '0%';
+
+    var okCount = 0, savedCount = 0, failCount = 0;
+
+    for (var i = 0; i < keys.length; i++) {
+      var parts = keys[i].split(','), r = +parts[0], c = +parts[1];
+      var us = Math.round(map[r][c] * 1000);
+      try {
+        var res = await sendCmdAwait('SET,' + r + ',' + c + ',' + us, 1500);
+        okCount++;
+        if (res.saved) savedCount++;
+        baseMap[r][c] = map[r][c];
+        delete dirty[r + ',' + c];
+      } catch (err) { failCount++; }
+      bar.style.width = Math.round(100 * (i + 1) / keys.length) + '%';
+      await new Promise(function (r2) { setTimeout(r2, 25); });
+    }
+
+    saving = false;
+    prog.style.display = 'none';
+    updateDirtyUI();
+    drawMap();
+
+    if (failCount === 0) {
+      if (savedCount === okCount) showSaveInfo('Berhasil: ' + okCount + ' sel tersimpan di EEPROM.', 'ok');
+      else showSaveInfo('Berhasil: ' + okCount + ' sel dikirim ke RAM, ' + savedCount + ' tersimpan di EEPROM (sisanya karena mesin berputar). Matikan mesin lalu simpan ulang.', 'warn');
+    } else if (okCount > 0) {
+      showSaveInfo('Sebagian: ' + okCount + ' berhasil, ' + failCount + ' gagal. Coba "Simpan" lagi.', 'warn');
+    } else {
+      showSaveInfo('Gagal mengirim. Cek koneksi serial.', 'err');
+    }
+  });
+
+  els.btnDiscard.addEventListener('click', function () {
+    if (!ROWS || dirtyCount() === 0) return;
+    if (!confirm('Batalkan semua perubahan draft dan kembalikan ke tabel yang dikirim STM32?')) return;
+    for (var i = 0; i < ROWS; i++) for (var j = 0; j < COLS; j++) map[i][j] = baseMap[i][j];
+    dirty = {};
+    updateDirtyUI(); drawMap();
+    showSaveInfo('Perubahan dibatalkan.', 'info');
+  });
+
+  // ---------- Kalibrasi & tombol lain ----------
+  async function sendCmd(cmd) {
+    if (!port || !port.writable) { if (!demoTimer) setStatus('Tidak terhubung — perintah tidak terkirim', 'err'); return; }
+    try {
+      var w = port.writable.getWriter();
+      await w.write(new TextEncoder().encode(cmd + '\n'));
+      w.releaseLock();
+    } catch (e) { setStatus('Gagal kirim perintah: ' + e.message, 'err'); }
+  }
+  els.btnCalLow.addEventListener('click', function () { sendCmd('CAL_LOW'); });
+  els.btnCalHigh.addEventListener('click', function () { sendCmd('CAL_HIGH'); });
+  els.btnCalReset.addEventListener('click', function () { if (confirm('Reset kalibrasi TPS ke default?')) sendCmd('CAL_RESET'); });
+
+  var retry = null, tries = 0;
+  function tableDone() { return ROWS && total && got >= total; }
+  function reqTable() {
+    clearInterval(retry); tries = 0; sendCmd('GET');
+    retry = setInterval(function () {
+      if (tableDone() || !port) { clearInterval(retry); return; }
+      if (++tries > 4) { clearInterval(retry); setStatus('STM32 tidak menjawab GET.', 'err'); return; }
+      sendCmd('GET');
+    }, 2000);
+  }
+  els.btnReload.addEventListener('click', function () {
+    if (dirtyCount() && !confirm('Ada ' + dirtyCount() + ' perubahan draft. Baca ulang akan membuang draft. Lanjut?')) return;
+    dirty = {};
+    reqTable();
+  });
+
+  // ---------- Web Serial ----------
+  async function connect() {
+    if (!('serial' in navigator)) { setStatus('Browser tidak mendukung Web Serial. Pakai Chrome/Edge.', 'err'); return; }
+    stopDemo();
+    try {
+      port = await navigator.serial.requestPort();
+      await port.open({ baudRate: 115200 });
+      keepReading = true; buffer = ''; ROWS = 0; map = []; baseMap = []; dirty = {}; got = 0; total = 0;
+      selActive = false;
+      setConnected(true); setStatus('Terhubung, meminta tabel...', 'ok');
+      updateDirtyUI();
+      readLoop();
+      setTimeout(reqTable, 300);
+    } catch (err) { port = null; setStatus('Gagal menyambung: ' + err.message, 'err'); }
+  }
+  async function readLoop() {
+    var dec = new TextDecoder();
+    while (port && port.readable && keepReading) {
+      reader = port.readable.getReader();
+      try {
+        while (true) {
+          var r = await reader.read();
+          if (r.done) break;
+          buffer += dec.decode(r.value, { stream: true });
+          var i;
+          while ((i = buffer.indexOf('\n')) >= 0) {
+            var line = buffer.slice(0, i).trim(); buffer = buffer.slice(i + 1);
+            if (line) handleLine(line);
+          }
+          if (buffer.length > 500) buffer = '';
+        }
+      } catch (err) { setStatus('Error baca: ' + err.message, 'err'); }
+      finally { reader.releaseLock(); reader = null; }
+    }
+    try { if (port) await port.close(); } catch (e) {}
+    port = null; setConnected(false); setStatus('Terputus', '');
+  }
+  async function disconnect() { keepReading = false; try { if (reader) await reader.cancel(); } catch (e) {} }
+
+  // ---------- Demo ----------
+  function nearest(bp, v) { var b = 0, d = 1e9; for (var i = 0; i < bp.length; i++) { var x = Math.abs(bp[i] - v); if (x < d) { d = x; b = i; } } return b; }
+  function startDemo() {
+    if (demoTimer) { stopDemo(); return; }
+    RPM_BP = [1100,1300,1400,1500,1600,1650,1700,1800,2000,2250,2500,2750,3000,3250,3500,4000,4500,5000,5500,6000,6500,7000,7500,8000,8500,9000,9500,9850];
+    TPS_BP = [0,0.4,0.7,1,2,3.6,5.6,8.4,10.8,13.6,16.4,19.2,21.6,24.1,27.2,29.7,32.8,36.4,41,46.1,51.6,56.3,61.4,71.7,74.3];
+    ROWS = RPM_BP.length; COLS = TPS_BP.length; tpsFull = 74.3; map = []; baseMap = []; dirty = {};
+    for (var r = 0; r < ROWS; r++) { map.push([]); baseMap.push([]); for (var c = 0; c < COLS; c++) { var v = Math.max(0.2, 1.6 - r * 0.04 + c * 0.04); map[r].push(v); baseMap[r].push(v); } }
+    calLow = 400; calHigh = 3000; calSaved = 1; eepReady = true;
+    els.btnDemo.textContent = 'Hentikan demo'; setStatus('Mode demo (data simulasi)', 'ok');
+    selActive = false;
+    updateDirtyUI();
+    demoTimer = setInterval(function () {
+      demoPhase += 0.05;
+      lastRpm = 1800 + 2600 * (0.5 + 0.5 * Math.sin(demoPhase * 0.7));
+      lastTps = tpsFull * (0.1 + 0.8 * (0.5 + 0.5 * Math.sin(demoPhase * 0.4 + 1.3)));
+      lastRev = Math.round(60000000 / lastRpm); lastTdc++;
+      lastAdc = Math.round(calLow + (calHigh - calLow) * lastTps / tpsFull);
+      liveR = nearest(RPM_BP, lastRpm); liveC = nearest(TPS_BP, lastTps);
+      lastPw = Math.round(map[liveR][liveC] * 1000);
+      engineRunning = true;
+      linesThisSec++; updateLive();
+    }, 50);
+  }
+  function stopDemo() {
+    if (!demoTimer) return;
+    clearInterval(demoTimer); demoTimer = null; els.btnDemo.textContent = 'Demo';
+    if (!port) { setStatus('Belum terhubung', ''); ROWS = 0; map = []; baseMap = []; dirty = {}; liveR = liveC = -1; engineRunning = false; selActive = false; updateDirtyUI(); drawMap(); }
+  }
+
+  els.showColor.addEventListener('change', drawMap);
+  els.showDiff.addEventListener('change', drawMap);
+  els.btnConnect.addEventListener('click', connect);
+  els.btnDisconnect.addEventListener('click', disconnect);
+  els.btnDemo.addEventListener('click', startDemo);
+  window.addEventListener('resize', drawMap);
+  setInterval(function () { els.rate.textContent = linesThisSec; linesThisSec = 0; }, 1000);
+  updateDirtyUI();
+  drawMap();
+})();
+</script>
+</body>
+</html>
